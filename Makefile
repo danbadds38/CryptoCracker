@@ -41,12 +41,12 @@ docker-build:
 
 docker-up:
 	@echo "Starting CryptoCracker services..."
-	docker-compose up -d
-	@echo "Services started! Monitor at http://localhost:3000"
+	docker-compose -f docker-compose-simple.yml up -d
+	@echo "Services started!"
 
 docker-down:
 	@echo "Stopping services..."
-	docker-compose down
+	docker-compose -f docker-compose-simple.yml down
 	@echo "Services stopped."
 
 # Crack wallet with configuration

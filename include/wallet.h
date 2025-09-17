@@ -2,7 +2,7 @@
 #define WALLET_H
 
 #include "types.h"
-#include <json/json.h>
+#include <jsoncpp/json/json.h>
 
 class WalletLoader {
 public:

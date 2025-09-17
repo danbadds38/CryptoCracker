@@ -24,6 +24,15 @@ __device__ void generate_suffix(uint64_t index, char* suffix, int suffix_len) {
     suffix[suffix_len] = '\0';
 }
 
+__device__ void device_strcpy(char* dest, const char* src) {
+    int i = 0;
+    while (src[i] != '\0') {
+        dest[i] = src[i];
+        i++;
+    }
+    dest[i] = '\0';
+}
+
 __device__ void pbkdf2_sha256(const uint8_t* password, size_t pass_len,
                               const uint8_t* salt, size_t salt_len,
                               uint32_t iterations, uint8_t* output, size_t dklen) {
@@ -113,7 +122,6 @@ __global__ void crack_wallet_kernel(const uint8_t* wallet_data,
     
     // Extract wallet components from packed data
     const uint8_t* salt = wallet_data;
-    const uint8_t* iv = wallet_data + 32;
     const uint8_t* ciphertext = wallet_data + 48;
     const uint8_t* mac = wallet_data + 176;
     
@@ -128,7 +136,7 @@ __global__ void crack_wallet_kernel(const uint8_t* wallet_data,
     // Verify MAC
     if (verify_mac(derived_key, ciphertext, 128, mac)) {
         *found = true;
-        strcpy(found_password, candidate);
+        device_strcpy(found_password, candidate);
     }
 }
 
@@ -168,7 +176,10 @@ bool GPUEngine::initialize(const WalletData& wallet, const std::vector<std::stri
 
 bool GPUEngine::allocateMemory() {
     size_t wallet_data_size = 256;  // Packed wallet data
-    size_t scrypt_memory_size = config_.batch_size * 128 * SCRYPT_R * SCRYPT_N;
+    // Reduce memory allocation - scrypt needs about 128MB per thread for N=262144
+    // For batch processing, we'll use a smaller subset
+    size_t threads_per_batch = 1024;  // Process 1024 passwords at a time on GPU
+    size_t scrypt_memory_size = threads_per_batch * 128 * SCRYPT_R * 1024;  // ~1GB total
     
     cudaError_t err;
     

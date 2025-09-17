@@ -5,6 +5,7 @@
 #include <sqlite3.h>
 #include <memory>
 #include <mutex>
+#include <thread>
 
 class CheckpointManager {
 public:

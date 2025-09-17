@@ -8,6 +8,8 @@ find_package(CUDA REQUIRED)
 find_package(SQLite3 REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(JSONCPP jsoncpp)
 
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
@@ -31,6 +33,8 @@ target_link_libraries(cryptocracker
     OpenSSL::SSL
     OpenSSL::Crypto
     Threads::Threads
+    jsoncpp
+    scrypt
 )
 
 set_target_properties(cryptocracker PROPERTIES

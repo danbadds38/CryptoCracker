@@ -1,0 +1,24 @@
+services:
+  cryptocracker:
+    build: .
+    image: cryptocracker:latest
+    container_name: cryptocracker
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+      - CHECKPOINT_DB=/app/checkpoints/session.db
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./wallets:/app/wallets
+      - ./checkpoints:/app/checkpoints
+      - ./logs:/app/logs
+      - ./config:/app/config
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

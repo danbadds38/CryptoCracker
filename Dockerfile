@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
     git \
+    pkg-config \
     libssl-dev \
     libsqlite3-dev \
     libjsoncpp-dev \
@@ -35,5 +36,5 @@ RUN cd build && \
 ENV CUDA_VISIBLE_DEVICES=0
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
-# Default command
-CMD ["./build/cryptocracker", "--help"]
+# Default command - keep container running
+CMD ["tail", "-f", "/dev/null"]
