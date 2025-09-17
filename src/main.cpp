@@ -143,11 +143,17 @@ int run_cracker(const std::string& wallet_path, const std::string& passwords_pat
     uint64_t charset_size = 94;
     uint64_t total_combinations = 0;
     
-    if (suffix_length == 0 || suffix_length == 4) {
+    if (suffix_length == 0) {
+        // Default: try both 4 and 5
         total_combinations += charset_size * charset_size * charset_size * charset_size;
-    }
-    if (suffix_length == 0 || suffix_length == 5) {
         total_combinations += charset_size * charset_size * charset_size * charset_size * charset_size;
+    } else {
+        // Specific length: calculate for that length
+        uint64_t single_combo = 1;
+        for (int i = 0; i < suffix_length; i++) {
+            single_combo *= charset_size;
+        }
+        total_combinations = single_combo;
     }
     
     total_combinations *= base_passwords.size();
@@ -313,8 +319,9 @@ int main(int argc, char* argv[]) {
                 break;
             case 's':
                 suffix_length = std::stoi(optarg);
-                if (suffix_length != 4 && suffix_length != 5) {
-                    std::cerr << "Suffix length must be 4 or 5" << std::endl;
+                if (suffix_length < 1 || suffix_length > 12) {
+                    std::cerr << "Suffix length must be between 1 and 12" << std::endl;
+                    std::cerr << "WARNING: Lengths above 6 will take extremely long!" << std::endl;
                     return 1;
                 }
                 break;

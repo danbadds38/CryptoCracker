@@ -67,6 +67,35 @@ crack: docker-up
 		--checkpoint /app/checkpoints/session.db \
 		--log /app/logs/crack.log
 
+# Crack with custom suffix length
+crack-3:
+	@echo "Cracking with 3-character suffixes..."
+	docker exec cryptocracker ./build/cryptocracker \
+		--wallet /app/wallets/wallet.json \
+		--passwords /app/config/passwords.txt \
+		--suffix-length 3
+
+crack-4:
+	@echo "Cracking with 4-character suffixes..."
+	docker exec cryptocracker ./build/cryptocracker \
+		--wallet /app/wallets/wallet.json \
+		--passwords /app/config/passwords.txt \
+		--suffix-length 4
+
+crack-5:
+	@echo "Cracking with 5-character suffixes..."
+	docker exec cryptocracker ./build/cryptocracker \
+		--wallet /app/wallets/wallet.json \
+		--passwords /app/config/passwords.txt \
+		--suffix-length 5
+
+crack-6:
+	@echo "Cracking with 6-character suffixes..."
+	docker exec cryptocracker ./build/cryptocracker \
+		--wallet /app/wallets/wallet.json \
+		--passwords /app/config/passwords.txt \
+		--suffix-length 6
+
 # Resume from checkpoint
 resume: docker-up
 	@echo "Resuming from checkpoint..."
