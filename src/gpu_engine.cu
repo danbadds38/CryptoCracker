@@ -9,13 +9,11 @@
 
 #define CHARSET_SIZE 94
 #define MAX_SUFFIX_LEN 12
-#define MIN_SUFFIX_LEN 4
-#define SCRYPT_N 262144
-#define SCRYPT_R 8
-#define SCRYPT_P 1
-#define SCRYPT_DKLEN 32
 
 __constant__ char d_charset[CHARSET_SIZE + 1] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`";
+
+// Include the real crypto implementations
+#include "gpu_crypto.cu"
 
 __device__ void generate_suffix(uint64_t index, char* suffix, int suffix_len) {
     for (int i = suffix_len - 1; i >= 0; i--) {
@@ -34,68 +32,7 @@ __device__ void device_strcpy(char* dest, const char* src) {
     dest[i] = '\0';
 }
 
-__device__ void pbkdf2_sha256(const uint8_t* password, size_t pass_len,
-                              const uint8_t* salt, size_t salt_len,
-                              uint32_t iterations, uint8_t* output, size_t dklen) {
-    // Simplified PBKDF2-SHA256 implementation
-    // In production, use optimized crypto library
-    
-    uint8_t U[32], T[32];
-    uint32_t block_count = (dklen + 31) / 32;
-    
-    for (uint32_t block = 1; block <= block_count; block++) {
-        // First iteration
-        // HMAC-SHA256(password, salt || block_index)
-        // Simplified - would need full SHA256 implementation
-        memset(U, block, 32);
-        memcpy(T, U, 32);
-        
-        // Remaining iterations
-        for (uint32_t iter = 1; iter < iterations; iter++) {
-            // HMAC-SHA256(password, U)
-            // XOR with T
-            for (int i = 0; i < 32; i++) {
-                T[i] ^= U[i];
-            }
-        }
-        
-        size_t copy_len = (block == block_count && dklen % 32) ? (dklen % 32) : 32;
-        memcpy(output + (block - 1) * 32, T, copy_len);
-    }
-}
-
-__device__ void scrypt_kdf(const uint8_t* password, size_t pass_len,
-                           const uint8_t* salt, size_t salt_len,
-                           uint8_t* output, void* scratch_memory) {
-    // Scrypt KDF implementation
-    // This is a simplified version - production would need full scrypt
-    pbkdf2_sha256(password, pass_len, salt, salt_len, 1, output, 32);
-    
-    // Scrypt core operations would go here
-    // Using scratch_memory for the large memory requirement
-}
-
-__device__ bool verify_mac(const uint8_t* derived_key, const uint8_t* ciphertext,
-                           size_t ct_len, const uint8_t* expected_mac) {
-    // Verify MAC using derived key
-    // Simplified - would need full HMAC-SHA256
-    uint8_t calculated_mac[32];
-    
-    // Calculate HMAC-SHA256(derived_key[16:32], ciphertext)
-    // For now, simplified comparison
-    for (int i = 0; i < 32; i++) {
-        calculated_mac[i] = derived_key[i % 32] ^ ciphertext[i % ct_len];
-    }
-    
-    // Compare MACs
-    for (int i = 0; i < 32; i++) {
-        if (calculated_mac[i] != expected_mac[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
+// Main wallet cracking kernel using wallet's actual KDF parameters
 __global__ void crack_wallet_kernel(const uint8_t* wallet_data,
                                     const char* base_passwords,
                                     uint32_t base_pass_len,
@@ -104,7 +41,12 @@ __global__ void crack_wallet_kernel(const uint8_t* wallet_data,
                                     int suffix_len,
                                     bool* found,
                                     char* found_password,
-                                    void* scrypt_memory) {
+                                    void* scrypt_memory,
+                                    uint32_t kdf_n,
+                                    uint32_t kdf_r,
+                                    uint32_t kdf_p,
+                                    uint32_t kdf_dklen,
+                                    bool use_scrypt) {
     
     uint64_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     uint64_t suffix_index = suffix_start + tid;
@@ -125,17 +67,58 @@ __global__ void crack_wallet_kernel(const uint8_t* wallet_data,
     }
     candidate[base_pass_len + suffix_len] = '\0';
     
-    // For now, use simplified test - just check if we generated valid password
-    // Real scrypt implementation would go here
+    // Extract wallet components from packed data
+    const uint8_t* salt = wallet_data;             // 32 bytes at offset 0
+    const uint8_t* iv = wallet_data + 32;          // 16 bytes at offset 32
+    const uint8_t* ciphertext = wallet_data + 48;  // 32 bytes at offset 48
+    const uint8_t* mac = wallet_data + 80;         // 32 bytes at offset 80
     
-    // Simplified MAC check for testing
-    if (suffix_index % 1000000 == 999999) {  // Test success every millionth attempt
-        // Don't actually set found - just for testing throughput
-        // *found = true;
-        // device_strcpy(found_password, candidate);
+    // Derive key using the wallet's specified KDF
+    uint8_t derived_key[32];
+    
+    if (use_scrypt) {
+        // Use scrypt for this wallet (as specified in wallet.json)
+        // N=262144, r=8, p=1, dklen=32
+        uint8_t* thread_scratch = (uint8_t*)scrypt_memory + tid * (256 * 1024); // 256KB per thread
+        scrypt((uint8_t*)candidate, base_pass_len + suffix_len,
+               salt, 32, 
+               kdf_n, kdf_r, kdf_p, kdf_dklen,
+               derived_key, thread_scratch);
+    } else {
+        // Use PBKDF2 for older wallets
+        pbkdf2_hmac_sha256((uint8_t*)candidate, base_pass_len + suffix_len,
+                          salt, 32, kdf_n, kdf_dklen, derived_key);
+    }
+    
+    // Verify MAC using Keccak-256
+    // Ethereum MAC = Keccak256(derived_key[16:32] || ciphertext)
+    uint8_t mac_input[48];  // 16 bytes of key + 32 bytes of ciphertext
+    for (int i = 0; i < 16; i++) {
+        mac_input[i] = derived_key[16 + i];  // Second half of derived key
+    }
+    for (int i = 0; i < 32; i++) {
+        mac_input[16 + i] = ciphertext[i];
+    }
+    
+    uint8_t calculated_mac[32];
+    keccak256(mac_input, 48, calculated_mac);
+    
+    // Compare MACs
+    bool mac_match = true;
+    for (int i = 0; i < 32; i++) {
+        if (calculated_mac[i] != mac[i]) {
+            mac_match = false;
+            break;
+        }
+    }
+    
+    if (mac_match) {
+        *found = true;
+        device_strcpy(found_password, candidate);
     }
 }
 
+// Host code
 GPUEngine::GPUEngine(int device_id) : d_wallet_data_(nullptr),
                                       d_derived_keys_(nullptr),
                                       d_candidates_(nullptr),
@@ -143,9 +126,9 @@ GPUEngine::GPUEngine(int device_id) : d_wallet_data_(nullptr),
                                       d_found_password_(nullptr),
                                       d_scrypt_memory_(nullptr) {
     config_.device_id = device_id;
-    config_.batch_size = 1024 * 1024;  // 1M passwords per batch
-    config_.threads_per_block = 256;
-    config_.max_blocks = 4096;
+    config_.batch_size = 1;  // Single password at a time for testing
+    config_.threads_per_block = 1;  // Single thread for testing
+    config_.max_blocks = 1;  // Single block for memory-hard functions
     
     cudaSetDevice(device_id);
 }
@@ -167,57 +150,88 @@ bool GPUEngine::initialize(const WalletData& wallet, const std::vector<std::stri
     std::cout << "CUDA Cores: " << prop.multiProcessorCount * 128 << std::endl;
     std::cout << "Memory: " << (prop.totalGlobalMem / (1024*1024*1024)) << " GB" << std::endl;
     
+    // Show wallet KDF parameters
+    std::cout << "[INFO] Wallet KDF: scrypt" << std::endl;
+    std::cout << "[INFO] Parameters: N=" << wallet_.kdf_params_n 
+              << ", r=" << wallet_.kdf_params_r 
+              << ", p=" << wallet_.kdf_params_p
+              << ", dklen=" << wallet_.kdf_params_dklen << std::endl;
+    
     return allocateMemory();
 }
 
 bool GPUEngine::allocateMemory() {
-    size_t wallet_data_size = 256;  // Packed wallet data
-    // Reduce memory allocation - scrypt needs about 128MB per thread for N=262144
-    // For batch processing, we'll use a smaller subset
-    size_t threads_per_batch = 1024;  // Process 1024 passwords at a time on GPU
-    size_t scrypt_memory_size = threads_per_batch * 128 * SCRYPT_R * 1024;  // ~1GB total
+    size_t wallet_data_size = 256;
+    
+    // For scrypt with N=262144, r=8, we need significant memory
+    // Each thread needs: 256KB for scrypt
+    size_t threads_per_batch = config_.batch_size;
+    size_t scrypt_memory_size = threads_per_batch * 256 * 1024;  // 256KB per thread
+    
+    std::cout << "[INFO] Allocating " << (scrypt_memory_size / (1024*1024)) 
+              << " MB for scrypt operations" << std::endl;
     
     cudaError_t err;
     
     err = cudaMalloc(&d_wallet_data_, wallet_data_size);
-    if (err != cudaSuccess) return false;
-    
-    err = cudaMalloc(&d_found_, sizeof(bool));
-    if (err != cudaSuccess) return false;
-    
-    err = cudaMalloc(&d_found_password_, 256);
-    if (err != cudaSuccess) return false;
-    
-    // Allocate large memory for scrypt operations
-    // Note: For testing, we'll use a smaller allocation
-    err = cudaMalloc(&d_scrypt_memory_, scrypt_memory_size);
     if (err != cudaSuccess) {
-        std::cerr << "Failed to allocate " << (scrypt_memory_size / (1024*1024)) 
-                  << " MB for scrypt memory: " << cudaGetErrorString(err) << std::endl;
-        
-        // Try with smaller allocation
-        scrypt_memory_size = 1024 * 1024 * 100; // 100MB for testing
-        err = cudaMalloc(&d_scrypt_memory_, scrypt_memory_size);
-        if (err != cudaSuccess) {
-            std::cerr << "Failed even with smaller allocation" << std::endl;
-            return false;
-        }
-        config_.batch_size = 1024; // Reduce batch size
+        std::cerr << "Failed to allocate wallet data: " << cudaGetErrorString(err) << std::endl;
+        return false;
     }
     
-    // Pack and upload wallet data
-    uint8_t packed_wallet[256] = {0};
-    size_t salt_size = std::min(wallet_.salt.size(), (size_t)32);
-    size_t iv_size = std::min(wallet_.iv.size(), (size_t)16);
-    size_t ct_size = std::min(wallet_.ciphertext.size(), (size_t)128);
-    size_t mac_size = std::min(wallet_.mac.size(), (size_t)32);
+    err = cudaMalloc(&d_found_, sizeof(bool));
+    if (err != cudaSuccess) {
+        std::cerr << "Failed to allocate found flag: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
     
-    if (salt_size > 0) memcpy(packed_wallet, wallet_.salt.data(), salt_size);
-    if (iv_size > 0) memcpy(packed_wallet + 32, wallet_.iv.data(), iv_size);
-    if (ct_size > 0) memcpy(packed_wallet + 48, wallet_.ciphertext.data(), ct_size);
-    if (mac_size > 0) memcpy(packed_wallet + 176, wallet_.mac.data(), mac_size);
+    err = cudaMalloc(&d_found_password_, 256);
+    if (err != cudaSuccess) {
+        std::cerr << "Failed to allocate password buffer: " << cudaGetErrorString(err) << std::endl;
+        return false;
+    }
+    
+    err = cudaMalloc(&d_scrypt_memory_, scrypt_memory_size);
+    if (err != cudaSuccess) {
+        std::cerr << "Failed to allocate scrypt memory: " << cudaGetErrorString(err) << std::endl;
+        // Try with smaller batch
+        config_.batch_size = 8;
+        threads_per_batch = 8;
+        scrypt_memory_size = threads_per_batch * 256 * 1024;
+        
+        err = cudaMalloc(&d_scrypt_memory_, scrypt_memory_size);
+        if (err != cudaSuccess) {
+            std::cerr << "Even smaller allocation failed" << std::endl;
+            return false;
+        }
+        std::cout << "[INFO] Reduced batch size to " << config_.batch_size << std::endl;
+    }
+    
+    // Pack wallet data: salt(32) + iv(16) + ciphertext(32) + mac(32)
+    uint8_t packed_wallet[256] = {0};
+    
+    // Copy salt (32 bytes)
+    if (wallet_.salt.size() >= 32) {
+        memcpy(packed_wallet, wallet_.salt.data(), 32);
+    }
+    
+    // Copy IV (16 bytes)
+    if (wallet_.iv.size() >= 16) {
+        memcpy(packed_wallet + 32, wallet_.iv.data(), 16);
+    }
+    
+    // Copy ciphertext (32 bytes for Ethereum private key)
+    if (wallet_.ciphertext.size() >= 32) {
+        memcpy(packed_wallet + 48, wallet_.ciphertext.data(), 32);
+    }
+    
+    // Copy MAC (32 bytes)
+    if (wallet_.mac.size() >= 32) {
+        memcpy(packed_wallet + 80, wallet_.mac.data(), 32);
+    }
     
     cudaMemcpy(d_wallet_data_, packed_wallet, 256, cudaMemcpyHostToDevice);
+    cudaMemset(d_found_, 0, sizeof(bool));
     
     return true;
 }
@@ -230,7 +244,11 @@ void GPUEngine::freeMemory() {
 }
 
 bool GPUEngine::processBatch(uint32_t base_index, uint64_t start_suffix, 
-                             uint64_t end_suffix, std::string& found_password) {
+                             uint64_t end_suffix, std::string& found_password, int suffix_len) {
+    
+    std::cout << "[DEBUG] processBatch called: base=" << base_index 
+              << " start=" << start_suffix << " end=" << end_suffix 
+              << " suffix_len=" << suffix_len << std::endl;
     
     const std::string& base_pass = base_passwords_[base_index];
     char* d_base_pass;
@@ -247,30 +265,40 @@ bool GPUEngine::processBatch(uint32_t base_index, uint64_t start_suffix,
     uint32_t blocks = (batch_size + config_.threads_per_block - 1) / config_.threads_per_block;
     blocks = std::min(blocks, (uint32_t)config_.max_blocks);
     
-    // Try suffix lengths 4 and 5
-    for (int suffix_len = MIN_SUFFIX_LEN; suffix_len <= MAX_SUFFIX_LEN; suffix_len++) {
-        crack_wallet_kernel<<<blocks, config_.threads_per_block>>>(
-            d_wallet_data_,
-            d_base_pass,
-            base_pass.length(),
-            start_suffix,
-            end_suffix,
-            suffix_len,
-            d_found_,
-            d_found_password_,
-            d_scrypt_memory_
-        );
-        
-        cudaDeviceSynchronize();
-        
-        cudaMemcpy(&h_found, d_found_, sizeof(bool), cudaMemcpyDeviceToHost);
-        
-        if (h_found) {
-            cudaMemcpy(h_found_password, d_found_password_, 256, cudaMemcpyDeviceToHost);
-            found_password = std::string(h_found_password);
-            cudaFree(d_base_pass);
-            return true;
-        }
+    // Check if using scrypt or PBKDF2
+    bool use_scrypt = (wallet_.kdf_params_r > 0);  // r > 0 means scrypt
+    
+    // Launch kernel with wallet's KDF parameters
+    crack_wallet_kernel<<<blocks, config_.threads_per_block>>>(
+        d_wallet_data_,
+        d_base_pass,
+        base_pass.length(),
+        start_suffix,
+        end_suffix,
+        suffix_len,
+        d_found_,
+        d_found_password_,
+        d_scrypt_memory_,
+        wallet_.kdf_params_n,     // N parameter from wallet
+        wallet_.kdf_params_r,     // r parameter from wallet
+        wallet_.kdf_params_p,     // p parameter from wallet
+        wallet_.kdf_params_dklen, // dklen from wallet
+        use_scrypt
+    );
+    
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        std::cerr << "Kernel launch error: " << cudaGetErrorString(err) << std::endl;
+    }
+    
+    cudaDeviceSynchronize();
+    cudaMemcpy(&h_found, d_found_, sizeof(bool), cudaMemcpyDeviceToHost);
+    
+    if (h_found) {
+        cudaMemcpy(h_found_password, d_found_password_, 256, cudaMemcpyDeviceToHost);
+        found_password = std::string(h_found_password);
+        cudaFree(d_base_pass);
+        return true;
     }
     
     cudaFree(d_base_pass);
@@ -278,7 +306,8 @@ bool GPUEngine::processBatch(uint32_t base_index, uint64_t start_suffix,
 }
 
 size_t GPUEngine::getMaxThroughput() const {
-    return config_.batch_size * 10;  // Estimated 10 batches per second
+    // With scrypt N=262144, expect only 10-100 attempts/sec
+    return config_.batch_size;  // Very low for scrypt
 }
 
 void GPUEngine::getDeviceInfo(std::string& info) const {

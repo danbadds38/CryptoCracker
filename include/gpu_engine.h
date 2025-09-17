@@ -13,7 +13,7 @@ public:
     bool initialize(const WalletData& wallet, const std::vector<std::string>& base_passwords);
     
     bool processBatch(uint32_t base_index, uint64_t start_suffix, uint64_t end_suffix,
-                      std::string& found_password);
+                      std::string& found_password, int suffix_len);
     
     size_t getBatchSize() const { return config_.batch_size; }
     size_t getMaxThroughput() const;

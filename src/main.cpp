@@ -136,8 +136,8 @@ int run_cracker(const std::string& wallet_path, const std::string& passwords_pat
         checkpoint_data.suffix_position = 0;
     }
     
-    // Enable auto-save
-    checkpoint_mgr.enableAutoSave(10);  // Save every 10 seconds
+    // Enable auto-save (disabled for debugging)
+    // checkpoint_mgr.enableAutoSave(10);  // Save every 10 seconds
     
     // Calculate total search space
     uint64_t charset_size = 94;
@@ -166,9 +166,13 @@ int run_cracker(const std::string& wallet_path, const std::string& passwords_pat
     bool found = false;
     std::string found_password;
     
+    std::cout << "[DEBUG] Starting main loop, batch_size=" << batch_size << std::endl;
+    
     for (uint32_t base_idx = checkpoint_data.base_password_index; 
          base_idx < base_passwords.size() && !g_shutdown && !found; 
          base_idx++) {
+        
+        std::cout << "[DEBUG] Processing base password index " << base_idx << std::endl;
         
         uint64_t suffix_start = (base_idx == checkpoint_data.base_password_index) 
                                ? checkpoint_data.suffix_position : 0;
@@ -187,14 +191,19 @@ int run_cracker(const std::string& wallet_path, const std::string& passwords_pat
                 max_suffix *= charset_size;
             }
             
+            std::cout << "[DEBUG] Testing suffix length " << len 
+                      << ", max_suffix=" << max_suffix << std::endl;
+            
             for (uint64_t suffix_pos = suffix_start; 
                  suffix_pos < max_suffix && !g_shutdown && !found; 
                  suffix_pos += batch_size) {
                 
                 uint64_t end_pos = std::min(suffix_pos + batch_size, max_suffix);
                 
+                std::cout << "[DEBUG] About to call processBatch" << std::endl;
+                
                 // Process batch on GPU
-                if (gpu_engine.processBatch(base_idx, suffix_pos, end_pos, found_password)) {
+                if (gpu_engine.processBatch(base_idx, suffix_pos, end_pos, found_password, len)) {
                     found = true;
                     break;
                 }
@@ -204,6 +213,13 @@ int run_cracker(const std::string& wallet_path, const std::string& passwords_pat
                 checkpoint_data.suffix_position = suffix_pos;
                 checkpoint_data.total_attempts += (end_pos - suffix_pos);
                 checkpoint_data.last_attempt = base_passwords[base_idx] + " + suffix";
+                
+                // Debug output every 100 attempts
+                if (checkpoint_data.total_attempts % 100 == 0) {
+                    std::cout << "[DEBUG] Processed " << checkpoint_data.total_attempts 
+                              << " attempts, current: " << base_passwords[base_idx] 
+                              << " suffix_pos: " << suffix_pos << std::endl;
+                }
                 
                 // Calculate and display progress
                 auto current_time = std::chrono::steady_clock::now();

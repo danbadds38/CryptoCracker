@@ -65,8 +65,8 @@ bool WalletLoader::parseKeystoreV3(const Json::Value& root, WalletData& wallet) 
             wallet.address = root["address"].asString();
         }
         
-        // Extract crypto parameters
-        const Json::Value& crypto = root["crypto"];
+        // Extract crypto parameters (handle both "crypto" and "Crypto")
+        const Json::Value& crypto = root.isMember("crypto") ? root["crypto"] : root["Crypto"];
         
         // Ciphertext
         std::string ciphertext_hex = crypto["ciphertext"].asString();
