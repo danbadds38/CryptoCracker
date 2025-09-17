@@ -7,10 +7,11 @@
 #include <sstream>
 #include <algorithm>
 
-#define CHARSET_SIZE 94
+#define CHARSET_SIZE 95
 #define MAX_SUFFIX_LEN 12
 
-__constant__ char d_charset[CHARSET_SIZE + 1] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+-=[]{}|;:,.<>?/~`";
+// All printable ASCII from space (32) to tilde (126) = 95 characters
+__constant__ char d_charset[CHARSET_SIZE + 1] = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 
 // Include the real crypto implementations
 #include "gpu_crypto.cu"
@@ -126,8 +127,8 @@ GPUEngine::GPUEngine(int device_id) : d_wallet_data_(nullptr),
                                       d_found_password_(nullptr),
                                       d_scrypt_memory_(nullptr) {
     config_.device_id = device_id;
-    config_.batch_size = 1;  // Single password at a time for testing
-    config_.threads_per_block = 1;  // Single thread for testing
+    config_.batch_size = 32;  // Process 32 passwords in parallel (8MB total)
+    config_.threads_per_block = 32;  // Use 32 GPU threads
     config_.max_blocks = 1;  // Single block for memory-hard functions
     
     cudaSetDevice(device_id);
@@ -194,17 +195,7 @@ bool GPUEngine::allocateMemory() {
     err = cudaMalloc(&d_scrypt_memory_, scrypt_memory_size);
     if (err != cudaSuccess) {
         std::cerr << "Failed to allocate scrypt memory: " << cudaGetErrorString(err) << std::endl;
-        // Try with smaller batch
-        config_.batch_size = 8;
-        threads_per_batch = 8;
-        scrypt_memory_size = threads_per_batch * 256 * 1024;
-        
-        err = cudaMalloc(&d_scrypt_memory_, scrypt_memory_size);
-        if (err != cudaSuccess) {
-            std::cerr << "Even smaller allocation failed" << std::endl;
-            return false;
-        }
-        std::cout << "[INFO] Reduced batch size to " << config_.batch_size << std::endl;
+        return false;
     }
     
     // Pack wallet data: salt(32) + iv(16) + ciphertext(32) + mac(32)
@@ -268,6 +259,22 @@ bool GPUEngine::processBatch(uint32_t base_index, uint64_t start_suffix,
     // Check if using scrypt or PBKDF2
     bool use_scrypt = (wallet_.kdf_params_r > 0);  // r > 0 means scrypt
     
+    // Print the passwords being tested in this batch
+    std::cout << "[TESTING] Batch of " << (end_suffix - start_suffix) << " passwords:" << std::endl;
+    for (uint64_t i = start_suffix; i < end_suffix && i < start_suffix + 5; i++) {
+        char suffix[13] = {0};
+        uint64_t index = i;
+        for (int j = suffix_len - 1; j >= 0; j--) {
+            suffix[j] = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"[index % CHARSET_SIZE];
+            index /= CHARSET_SIZE;
+        }
+        suffix[suffix_len] = '\0';
+        std::cout << "  " << base_pass << suffix << std::endl;
+    }
+    if (end_suffix - start_suffix > 5) {
+        std::cout << "  ... and " << (end_suffix - start_suffix - 5) << " more" << std::endl;
+    }
+    
     // Launch kernel with wallet's KDF parameters
     crack_wallet_kernel<<<blocks, config_.threads_per_block>>>(
         d_wallet_data_,
@@ -292,13 +299,20 @@ bool GPUEngine::processBatch(uint32_t base_index, uint64_t start_suffix,
     }
     
     cudaDeviceSynchronize();
+    
+    std::cout << "[COMPLETED] Batch processed. Checking results..." << std::endl;
+    
     cudaMemcpy(&h_found, d_found_, sizeof(bool), cudaMemcpyDeviceToHost);
     
     if (h_found) {
         cudaMemcpy(h_found_password, d_found_password_, 256, cudaMemcpyDeviceToHost);
         found_password = std::string(h_found_password);
+        std::cout << "[SUCCESS] PASSWORD FOUND: " << found_password << std::endl;
         cudaFree(d_base_pass);
         return true;
+    }
+    else {
+        std::cout << "[NOT FOUND] Password not in this batch" << std::endl;
     }
     
     cudaFree(d_base_pass);

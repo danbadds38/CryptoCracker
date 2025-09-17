@@ -140,7 +140,7 @@ int run_cracker(const std::string& wallet_path, const std::string& passwords_pat
     // checkpoint_mgr.enableAutoSave(10);  // Save every 10 seconds
     
     // Calculate total search space
-    uint64_t charset_size = 94;
+    uint64_t charset_size = 95;  // All printable ASCII
     uint64_t total_combinations = 0;
     
     if (suffix_length == 0) {
@@ -159,6 +159,16 @@ int run_cracker(const std::string& wallet_path, const std::string& passwords_pat
     total_combinations *= base_passwords.size();
     
     std::cout << "[INFO] Total search space: " << total_combinations << " combinations" << std::endl;
+    
+    // Show what we'll be testing
+    std::cout << "[INFO] Will test passwords like:" << std::endl;
+    for (const auto& base : base_passwords) {
+        std::cout << "  " << base << "a" << std::endl;
+        std::cout << "  " << base << "b" << std::endl;
+        std::cout << "  " << base << "c" << std::endl;
+        std::cout << "  ... up to " << base << "~" << std::endl;
+        break; // Just show first password
+    }
     
     // Main cracking loop
     auto start_time = std::chrono::steady_clock::now();

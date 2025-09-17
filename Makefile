@@ -4,19 +4,32 @@
 help:
 	@echo "CryptoCracker - GPU-Accelerated Ethereum Wallet Recovery"
 	@echo ""
-	@echo "Available commands:"
-	@echo "  make setup          - Install dependencies and setup environment"
-	@echo "  make build          - Build the application locally"
-	@echo "  make docker-build   - Build Docker container with CUDA support"
-	@echo "  make docker-up      - Start all services with docker-compose"
-	@echo "  make docker-down    - Stop all services"
-	@echo "  make crack          - Start cracking with default settings"
+	@echo "Cracking Commands:"
+	@echo "  make crack          - Start cracking (default 4-5 chars)"
+	@echo "  make crack-3        - Try 3-character suffixes"
+	@echo "  make crack-4        - Try 4-character suffixes"
+	@echo "  make crack-5        - Try 5-character suffixes"
+	@echo "  make crack-6        - Try 6-character suffixes"
 	@echo "  make resume         - Resume from last checkpoint"
-	@echo "  make monitor        - Open monitoring dashboard"
+	@echo ""
+	@echo "Process Control:"
+	@echo "  make ps             - Show running processes and GPU status"
+	@echo "  make kill           - Kill all running crack attempts"
+	@echo "  make stop           - Emergency stop (restart container)"
+	@echo "  make gpu            - Show detailed GPU status"
+	@echo ""
+	@echo "Docker Management:"
+	@echo "  make docker-build   - Build Docker container with CUDA"
+	@echo "  make docker-up      - Start all services"
+	@echo "  make docker-down    - Stop all services"
 	@echo "  make logs           - Show container logs"
-	@echo "  make clean          - Clean build artifacts and checkpoints"
+	@echo ""
+	@echo "Other Commands:"
+	@echo "  make setup          - Install dependencies"
+	@echo "  make build          - Build the application"
+	@echo "  make clean          - Clean build artifacts"
 	@echo "  make test           - Run tests"
-	@echo "  make benchmark      - Run performance benchmark"
+	@echo "  make benchmark      - Run GPU benchmark"
 
 # Setup environment
 setup:
@@ -64,6 +77,16 @@ crack: docker-up
 		--wallet /app/wallets/wallet.json \
 		--passwords /app/config/passwords.txt \
 		--gpu 0 \
+		--checkpoint /app/checkpoints/session.db \
+		--log /app/logs/crack.log
+
+# Crack with custom suffix length
+crack-1:
+	@echo "Cracking with 3-character suffixes..."
+	docker exec cryptocracker ./build/cryptocracker \
+		--wallet /app/wallets/wallet.json \
+		--passwords /app/config/passwords.txt \
+		--suffix-length 1 \
 		--checkpoint /app/checkpoints/session.db \
 		--log /app/logs/crack.log
 
@@ -188,3 +211,41 @@ init-config:
 	@echo ""
 	@echo "Place your wallet file at: wallets/wallet.json"
 	@echo "Your wallet filename: UTC--2016-05-01T18-11-51.988445605Z--579f2f10d38787ffb573f0ce3370f196f357fa69"
+
+# Process management
+ps:
+	@echo "=== Running CryptoCracker Processes ==="
+	@docker exec cryptocracker ps aux | grep -E "cryptocracker|timeout" | grep -v grep || echo "No processes running"
+	@echo ""
+	@echo "=== GPU Status ==="
+	@docker exec cryptocracker nvidia-smi --query-gpu=gpu_name,temperature.gpu,power.draw,utilization.gpu --format=csv,noheader
+
+# Kill all running crack attempts
+kill:
+	@echo "Killing all running processes..."
+	@docker exec cryptocracker sh -c "pkill -9 -f cryptocracker; pkill -9 timeout" || true
+	@sleep 1
+	@echo "Checking for remaining processes..."
+	@docker exec cryptocracker ps aux | grep -E "cryptocracker|timeout" | grep -v grep || echo "All processes killed"
+
+# Emergency stop - restart container
+stop:
+	@echo "Emergency stop - restarting container..."
+	@docker restart cryptocracker
+	@echo "Container restarted. All processes killed."
+
+# GPU monitoring
+gpu:
+	@docker exec cryptocracker nvidia-smi
+
+# Full status - GPU + processes
+status:
+	@echo "=== GPU Status ==="
+	@docker exec cryptocracker nvidia-smi --query-gpu=name,temperature.gpu,power.draw,utilization.gpu,memory.used --format=csv
+	@echo ""
+	@echo "=== Running Processes ==="
+	@docker exec cryptocracker ps aux | grep -E "cryptocracker" | grep -v grep || echo "No processes running"
+	@echo ""
+	@echo "=== Process Details ==="
+	@docker exec cryptocracker sh -c 'for pid in $$(pgrep cryptocracker); do echo "PID $$pid:"; ps -p $$pid -o pid,etime,pcpu,pmem,args --no-headers; done' 2>/dev/null || echo "No cryptocracker process found"
+
