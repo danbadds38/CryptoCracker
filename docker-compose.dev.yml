@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  cryptocracker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./src:/app/src
+      - ./include:/app/include
+      - ./build:/app/build
+    command: bash -c "while true; do inotifywait -r -e modify /app/src /app/include && cd /app/build && make; done"

@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  cryptocracker:
+    build: .
+    image: cryptocracker:latest
+    container_name: cryptocracker
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0
+      - CHECKPOINT_DB=/app/checkpoints/session.db
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./wallets:/app/wallets
+      - ./checkpoints:/app/checkpoints
+      - ./logs:/app/logs
+      - ./config:/app/config
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks:
+      - cracker_network
+    restart: unless-stopped
+
+  monitor:
+    image: grafana/grafana:latest
+    container_name: cracker_monitor
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - cracker_network
+    depends_on:
+      - prometheus
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: cracker_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - cracker_network
+
+  redis:
+    image: redis:alpine
+    container_name: cracker_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - cracker_network
+    command: redis-server --appendonly yes
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  redis_data:
+
+networks:
+  cracker_network:
+    driver: bridge

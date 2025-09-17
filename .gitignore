@@ -1,0 +1,57 @@
+# Build directories
+build/
+cmake-build-*/
+.idea/
+
+# Checkpoint and log files
+checkpoints/*.db
+logs/*.log
+
+# Wallet files (sensitive)
+wallets/*.json
+wallets/*.dat
+wallets/UTC--*
+
+# Config files with passwords
+config/passwords.txt
+config/*.key
+
+# Compiled binaries
+cryptocracker
+*.exe
+*.out
+
+# Object files
+*.o
+*.obj
+*.cu.o
+
+# CUDA files
+*.cubin
+*.fatbin
+*.ptx
+
+# Dependencies
+*.d
+
+# Temporary files
+*.tmp
+*.swp
+*~
+
+# Docker volumes
+grafana_data/
+prometheus_data/
+redis_data/
+
+# IDE files
+.vscode/
+*.code-workspace
+
+# Python cache (for scripts)
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
