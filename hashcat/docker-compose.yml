@@ -1,0 +1,26 @@
+services:
+  hashcat:
+    build: .
+    container_name: hashcat-cracker
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - SUFFIX_LENGTH=${SUFFIX_LENGTH:-1}
+      - ATTACK_MODE=${ATTACK_MODE:-mask}
+      - RESUME=${RESUME:-0}
+    volumes:
+      - ../wallets/wallet.json:/data/wallet.json:ro
+      - ../config/passwords.txt:/data/passwords.txt:ro
+      - ./crack-session:/crack-session
+      - ./results:/results
+    working_dir: /crack
+    entrypoint: /bin/bash
+    command: ["-c", "/crack/crack.sh"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

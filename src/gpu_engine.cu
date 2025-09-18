@@ -13,8 +13,8 @@
 // All printable ASCII from space (32) to tilde (126) = 95 characters
 __constant__ char d_charset[CHARSET_SIZE + 1] = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 
-// Include the real crypto implementations
-#include "gpu_crypto.cu"
+// Include the proper crypto implementations
+#include "gpu_crypto_proper.cu"
 
 __device__ void generate_suffix(uint64_t index, char* suffix, int suffix_len) {
     for (int i = suffix_len - 1; i >= 0; i--) {
@@ -80,11 +80,11 @@ __global__ void crack_wallet_kernel(const uint8_t* wallet_data,
     if (use_scrypt) {
         // Use scrypt for this wallet (as specified in wallet.json)
         // N=262144, r=8, p=1, dklen=32
-        uint8_t* thread_scratch = (uint8_t*)scrypt_memory + tid * (256 * 1024); // 256KB per thread
-        scrypt((uint8_t*)candidate, base_pass_len + suffix_len,
-               salt, 32, 
-               kdf_n, kdf_r, kdf_p, kdf_dklen,
-               derived_key, thread_scratch);
+        uint8_t* thread_scratch = (uint8_t*)scrypt_memory + tid * (256 * 1024 * 1024); // 256MB per thread
+        scrypt_proper((uint8_t*)candidate, base_pass_len + suffix_len,
+                      salt, 32, 
+                      kdf_n, kdf_r, kdf_p, kdf_dklen,
+                      derived_key, thread_scratch);
     } else {
         // Use PBKDF2 for older wallets
         pbkdf2_hmac_sha256((uint8_t*)candidate, base_pass_len + suffix_len,
@@ -127,8 +127,8 @@ GPUEngine::GPUEngine(int device_id) : d_wallet_data_(nullptr),
                                       d_found_password_(nullptr),
                                       d_scrypt_memory_(nullptr) {
     config_.device_id = device_id;
-    config_.batch_size = 32;  // Process 32 passwords in parallel (8MB total)
-    config_.threads_per_block = 32;  // Use 32 GPU threads
+    config_.batch_size = 20;  // Process 20 passwords in parallel (5GB memory)
+    config_.threads_per_block = 20;  // Use 20 GPU threads
     config_.max_blocks = 1;  // Single block for memory-hard functions
     
     cudaSetDevice(device_id);
@@ -165,9 +165,9 @@ bool GPUEngine::allocateMemory() {
     size_t wallet_data_size = 256;
     
     // For scrypt with N=262144, r=8, we need significant memory
-    // Each thread needs: 256KB for scrypt
+    // Each thread needs: 256MB for full scrypt (N * 128 * r bytes)
     size_t threads_per_batch = config_.batch_size;
-    size_t scrypt_memory_size = threads_per_batch * 256 * 1024;  // 256KB per thread
+    size_t scrypt_memory_size = threads_per_batch * 256 * 1024 * 1024;  // 256MB per thread
     
     std::cout << "[INFO] Allocating " << (scrypt_memory_size / (1024*1024)) 
               << " MB for scrypt operations" << std::endl;
@@ -259,9 +259,9 @@ bool GPUEngine::processBatch(uint32_t base_index, uint64_t start_suffix,
     // Check if using scrypt or PBKDF2
     bool use_scrypt = (wallet_.kdf_params_r > 0);  // r > 0 means scrypt
     
-    // Print the passwords being tested in this batch
+    // Print the passwords being tested in this batch (show all for debugging)
     std::cout << "[TESTING] Batch of " << (end_suffix - start_suffix) << " passwords:" << std::endl;
-    for (uint64_t i = start_suffix; i < end_suffix && i < start_suffix + 5; i++) {
+    for (uint64_t i = start_suffix; i < end_suffix; i++) {
         char suffix[13] = {0};
         uint64_t index = i;
         for (int j = suffix_len - 1; j >= 0; j--) {
@@ -269,10 +269,9 @@ bool GPUEngine::processBatch(uint32_t base_index, uint64_t start_suffix,
             index /= CHARSET_SIZE;
         }
         suffix[suffix_len] = '\0';
-        std::cout << "  " << base_pass << suffix << std::endl;
-    }
-    if (end_suffix - start_suffix > 5) {
-        std::cout << "  ... and " << (end_suffix - start_suffix - 5) << " more" << std::endl;
+        std::cout << "  [" << i << "] " << base_pass << suffix;
+        if (i == 18) std::cout << " <-- This should be k0sk3sh$12";
+        std::cout << std::endl;
     }
     
     // Launch kernel with wallet's KDF parameters
